@@ -10,36 +10,21 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Twilio клиент
 TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
-TWILIO_PHONE_NUMBER = os.environ.get("TWILIO_PHONE_NUMBER", "")  # +1XXXXXXXXXX
+TWILIO_PHONE_NUMBER = os.environ.get("TWILIO_PHONE_NUMBER", "")
 
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
 
-# ══════════════════════════════════════════════════════════════
-# SMS — отправка исходящих SMS
-# ══════════════════════════════════════════════════════════════
+# ── SMS ──────────────────────────────────────────────────────
 
 def send_sms(to_phone: str, message: str) -> bool:
-    """
-    Отправить SMS фермеру.
-    
-    Args:
-        to_phone: номер получателя (формат: +77001234567)
-        message: текст сообщения
-    
-    Returns:
-        True если отправлено успешно
-    """
     try:
-        # Обрезаем длинные сообщения до лимита SMS
         if len(message) > 1600:
             message = message[:1597] + "..."
-
         twilio_client.messages.create(
-            body=f"AgriVoice 🌾\n{message}",
+            body=f"AgriVoice\n{message}",
             from_=TWILIO_PHONE_NUMBER,
             to=to_phone,
         )
@@ -50,102 +35,34 @@ def send_sms(to_phone: str, message: str) -> bool:
 
 
 def send_agent_answer_sms(to_phone: str, answer: str, field_name: str) -> bool:
-    """
-    Отправить ответ агента через SMS с указанием поля.
-    
-    Args:
-        to_phone: номер фермера
-        answer: ответ агронома
-        field_name: название поля для контекста
-    """
-    message = f"Поле «{field_name}»:\n{answer}"
-    return send_sms(to_phone, message)
+    return send_sms(to_phone, f"Поле {field_name}:\n{answer}")
 
-
-# ══════════════════════════════════════════════════════════════
-# ВХОДЯЩИЙ SMS WEBHOOK — обработка TwiML ответа
-# ══════════════════════════════════════════════════════════════
 
 def build_sms_response(answer: str) -> str:
-    """
-    Построить TwiML ответ на входящий SMS.
-    Twilio ожидает XML в ответ на webhook.
-    
-    Args:
-        answer: ответ агронома
-    
-    Returns:
-        TwiML XML строка
-    """
     resp = MessagingResponse()
-    resp.message(f"AgriVoice 🌾\n{answer}")
+    resp.message(f"AgriVoice\n{answer}")
     return str(resp)
 
 
 def build_sms_error_response(error_text: str) -> str:
-    """TwiML ответ с ошибкой"""
     resp = MessagingResponse()
     resp.message(error_text)
     return str(resp)
 
 
-# ══════════════════════════════════════════════════════════════
-# VOICE — исходящие звонки
-# ══════════════════════════════════════════════════════════════
-
-def make_outgoing_call(to_phone: str, twiml_url: str) -> bool:
-    """
-    Инициировать исходящий звонок фермеру.
-    
-    Args:
-        to_phone: номер фермера
-        twiml_url: URL который Twilio запросит для TwiML инструкций
-    
-    Returns:
-        True если звонок инициирован
-    """
-    try:
-        call = twilio_client.calls.create(
-            to=to_phone,
-            from_=TWILIO_PHONE_NUMBER,
-            url=twiml_url,
-        )
-        print(f"[Twilio Call] SID: {call.sid} → {to_phone}")
-        return True
-    except Exception as e:
-        print(f"[Twilio Call Error] {str(e)}")
-        return False
-
-
-# ══════════════════════════════════════════════════════════════
-# ВХОДЯЩИЙ ЗВОНОК — TwiML для голосового диалога
-# ══════════════════════════════════════════════════════════════
+# ── VOICE ────────────────────────────────────────────────────
 
 def build_voice_welcome(field_name: str, backend_url: str, field_id: str, farmer_id: str) -> str:
-    """
-    TwiML для приветствия при входящем звонке.
-    Записывает речь фермера и отправляет на /twilio/voice/process.
-    
-    Args:
-        field_name: название поля
-        backend_url: базовый URL бэкенда (для callback)
-        field_id: ID поля
-        farmer_id: ID фермера
-    
-    Returns:
-        TwiML XML строка
-    """
     response = VoiceResponse()
 
-    # Приветствие
+    # Используем alice — поддерживает русский язык бесплатно
     response.say(
-        f"Здравствуйте! Это AgriVoice, ваш AI-агроном. "
-        f"Скажите, что происходит на вашем поле {field_name}, после сигнала.",
+        f"Zdravstvuyte! Eto AgriVoice, vash AI agronom. "
+        f"Skazhite, chto proiskhodit na vashem pole {field_name}, posle signala.",
         language="ru-RU",
-        voice="Polly.Tatyana",  # Русский голос Amazon Polly через Twilio
+        voice="alice",
     )
 
-    # Собираем речь фермера
     gather = Gather(
         input="speech",
         language="ru-RU",
@@ -154,38 +71,24 @@ def build_voice_welcome(field_name: str, backend_url: str, field_id: str, farmer
         speech_timeout="auto",
         timeout=10,
     )
-    gather.say("Говорите сейчас.", language="ru-RU", voice="Polly.Tatyana")
+    gather.say("Govorite seychas.", language="ru-RU", voice="alice")
     response.append(gather)
 
-    # Если не услышали — повторяем
     response.say(
-        "Извините, я не услышал. Пожалуйста, перезвоните.",
+        "Izvinite, ya ne uslyshal. Pozhaluista, perezvonite.",
         language="ru-RU",
-        voice="Polly.Tatyana",
+        voice="alice",
     )
 
     return str(response)
 
 
 def build_voice_answer(answer: str, backend_url: str, field_id: str, farmer_id: str) -> str:
-    """
-    TwiML для произнесения ответа агронома и продолжения диалога.
-    
-    Args:
-        answer: ответ агронома от Gemini
-        backend_url: базовый URL бэкенда
-        field_id: ID поля
-        farmer_id: ID фермера
-    
-    Returns:
-        TwiML XML строка
-    """
     response = VoiceResponse()
 
     # Произносим ответ
-    response.say(answer, language="ru-RU", voice="Polly.Tatyana")
+    response.say(answer, language="ru-RU", voice="alice")
 
-    # Предлагаем задать ещё вопрос
     gather = Gather(
         input="speech",
         language="ru-RU",
@@ -194,26 +97,30 @@ def build_voice_answer(answer: str, backend_url: str, field_id: str, farmer_id: 
         speech_timeout="auto",
         timeout=8,
     )
-    gather.say(
-        "Есть ещё вопросы? Говорите.",
-        language="ru-RU",
-        voice="Polly.Tatyana",
-    )
+    gather.say("Est eshche voprosy? Govorite.", language="ru-RU", voice="alice")
     response.append(gather)
 
-    # Завершение разговора
-    response.say(
-        "Хорошего урожая! До свидания.",
-        language="ru-RU",
-        voice="Polly.Tatyana",
-    )
+    response.say("Khoroshego urozhaya! Do svidaniya.", language="ru-RU", voice="alice")
 
     return str(response)
 
 
 def build_voice_error(error_text: str) -> str:
-    """TwiML для ошибки при звонке"""
     response = VoiceResponse()
-    response.say(error_text, language="ru-RU", voice="Polly.Tatyana")
+    response.say(error_text, language="ru-RU", voice="alice")
     response.hangup()
     return str(response)
+
+
+def make_outgoing_call(to_phone: str, twiml_url: str) -> bool:
+    try:
+        call = twilio_client.calls.create(
+            to=to_phone,
+            from_=TWILIO_PHONE_NUMBER,
+            url=twiml_url,
+        )
+        print(f"[Twilio Call] SID: {call.sid}")
+        return True
+    except Exception as e:
+        print(f"[Twilio Call Error] {str(e)}")
+        return False
