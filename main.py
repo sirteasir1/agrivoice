@@ -290,7 +290,9 @@ async def twilio_sms_webhook(request: Request):
     """
     # Twilio отправляет form data
     form_data = await request.form()
-    from_phone = form_data.get("From", "")
+    from_phone = form_data.get("From", "").strip().replace(" ", "+")
+    if not from_phone.startswith("+"):
+        from_phone = "+" + from_phone
     body = form_data.get("Body", "").strip()
 
     print(f"[SMS] От {from_phone}: {body}")
@@ -405,7 +407,9 @@ async def twilio_voice_incoming(request: Request):
     Приветствует фермера, просит назвать вопрос.
     """
     form_data = await request.form()
-    from_phone = form_data.get("From", "")
+    from_phone = form_data.get("From", "").strip().replace(" ", "+")
+    if not from_phone.startswith("+"):
+        from_phone = "+" + from_phone
 
     print(f"[Voice Call] Входящий от {from_phone}")
 
