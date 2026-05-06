@@ -410,9 +410,11 @@ async def twilio_voice_incoming(request: Request):
     print(f"[Voice Call] Входящий от {from_phone}")
 
     # Ищем фермера
+    if not from_phone.startswith("+"):
+        from_phone = "+" + from_phone
     farmer = get_farmer_by_phone(from_phone)
     if not farmer:
-        farmer = get_farmer_by_phone("+" + from_phone.lstrip("+"))
+        farmer = get_farmer_by_phone("+" + from_phone.lstrip("0"))
     if not farmer:
         xml_response = build_voice_error(
             "Ваш номер не зарегистрирован в AgriVoice. "
