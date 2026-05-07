@@ -1,7 +1,7 @@
 # 🌾 AgriVoice — AI-агроном для фермеров
 
 > Голосовой AI-агроном который помнит каждое ваше поле.  
-> Gemini 2.0 Flash + Twilio SMS/Voice + Next.js + FastAPI
+> Gemini 2.5 Flash + Twilio SMS/Voice + Next.js + FastAPI
 
 ---
 
