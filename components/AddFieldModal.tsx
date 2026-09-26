@@ -1,11 +1,14 @@
 'use client'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { createField, getFarmerId } from '@/lib/api'
+import Icon from '@/components/Icon'
+import { useLang } from '@/lib/i18n'
 
 const CROPS = ['пшеница', 'кукуруза', 'подсолнух', 'ячмень', 'хлопок']
 const EMOJIS: Record<string, string> = { пшеница: '🌾', кукуруза: '🌽', подсолнух: '🌻', ячмень: '🌱', хлопок: '🌿' }
 
 export default function AddFieldModal({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }) {
+  const { t } = useLang()
   const [name, setName] = useState('')
   const [crop, setCrop] = useState('пшеница')
   const [area, setArea] = useState('')
@@ -13,9 +16,15 @@ export default function AddFieldModal({ onClose, onAdded }: { onClose: () => voi
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
   const submit = async () => {
-    if (!name.trim()) { setError('Введите название поля'); return }
-    if (!area || isNaN(+area) || +area <= 0) { setError('Введите площадь в гектарах'); return }
+    if (!name.trim()) { setError(t('errFieldName')); return }
+    if (!area || isNaN(+area) || +area <= 0) { setError(t('errArea')); return }
     const id = getFarmerId(); if (!id) return
     setLoading(true); setError('')
     try {
@@ -26,52 +35,66 @@ export default function AddFieldModal({ onClose, onAdded }: { onClose: () => voi
   }
 
   return (
-    <div onClick={e => e.target === e.currentTarget && onClose()} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '24px' }}>
-      <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border2)', borderRadius: '20px', padding: '32px', width: '100%', maxWidth: '440px', boxShadow: '0 32px 80px rgba(0,0,0,0.7)', animation: 'fadeUp 0.25s ease both' }}>
+    <div onClick={e => e.target === e.currentTarget && onClose()}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(48, 40, 20, 0.45)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '24px', animation: 'fadeIn 0.2s ease both' }}>
+      <div role="dialog" aria-modal="true" aria-label={t('modalTitle')}
+        className="card"
+        style={{ borderRadius: 'var(--r-xl)', padding: '32px', width: '100%', maxWidth: '460px', maxHeight: '90dvh', overflowY: 'auto', boxShadow: 'var(--shadow-card)', animation: 'fadeUp 0.25s ease both' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px' }}>
-          <h2 style={{ fontSize: '20px', fontWeight: 900, letterSpacing: '-0.3px' }}>Добавить поле</h2>
-          <button onClick={onClose} style={{ width: '32px', height: '32px', background: 'none', border: '1px solid var(--border2)', borderRadius: '8px', color: 'var(--text2)', cursor: 'pointer', fontSize: '18px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
+          <h2 className="display" style={{ fontSize: '21px' }}>{t('modalTitle')}</h2>
+          <button onClick={onClose} className="btn-icon" style={{ width: '38px', height: '38px' }} aria-label="×">
+            <Icon name="x" size={16} />
+          </button>
         </div>
 
-        {error && <div style={{ padding: '10px 14px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: '8px', color: '#fca5a5', fontSize: '13px', marginBottom: '20px' }}>{error}</div>}
+        {error && (
+          <div className="error-box" style={{ marginBottom: '20px', fontSize: '13.5px' }} role="alert">{error}</div>
+        )}
 
         <div style={{ marginBottom: '18px' }}>
-          <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: 'var(--text2)', marginBottom: '8px', letterSpacing: '0.8px' }}>НАЗВАНИЕ ПОЛЯ</label>
-          <input value={name} onChange={e => setName(e.target.value)} placeholder="Северное, Участок №3..."
-            style={{ width: '100%', padding: '12px 13px', background: 'var(--bg-input)', border: '1px solid var(--border2)', borderRadius: '9px', color: 'var(--text)', fontSize: '14px', fontFamily: 'inherit', outline: 'none', transition: 'border-color 0.15s' }}
-            onFocus={e => e.target.style.borderColor = 'var(--accent)'} onBlur={e => e.target.style.borderColor = 'var(--border2)'} />
+          <label htmlFor="f-name" className="field-label">{t('fieldNameLabel')}</label>
+          <input id="f-name" className="input" value={name} onChange={e => setName(e.target.value)} placeholder={t('fieldNamePh')} autoFocus />
         </div>
 
         <div style={{ marginBottom: '18px' }}>
-          <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: 'var(--text2)', marginBottom: '8px', letterSpacing: '0.8px' }}>КУЛЬТУРА</label>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: '8px' }}>
+          <span className="field-label">{t('cropLabel')}</span>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(78px, 1fr))', gap: '8px' }}>
             {CROPS.map(c => (
-              <button key={c} onClick={() => setCrop(c)} style={{ padding: '10px 6px', background: crop === c ? 'var(--accent-dim)' : 'var(--bg-input)', border: `1px solid ${crop === c ? 'var(--accent)' : 'var(--border2)'}`, borderRadius: '10px', color: crop === c ? 'var(--accent)' : 'var(--text2)', cursor: 'pointer', fontSize: '11px', fontWeight: 700, fontFamily: 'inherit', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', transition: 'all 0.15s' }}>
-                <span style={{ fontSize: '18px' }}>{EMOJIS[c]}</span>
-                <span>{c}</span>
+              <button key={c} type="button" onClick={() => setCrop(c)}
+                aria-pressed={crop === c}
+                style={{
+                  padding: '12px 6px', minHeight: '70px',
+                  background: crop === c ? 'var(--accent-dim)' : 'var(--bg-input)',
+                  border: `1.5px solid ${crop === c ? 'var(--accent)' : 'var(--border)'}`,
+                  borderRadius: '12px',
+                  color: crop === c ? 'var(--accent)' : 'var(--text2)',
+                  cursor: 'pointer', fontSize: '12px', fontWeight: 800,
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '5px',
+                  transition: 'all 0.15s',
+                }}>
+                <span style={{ fontSize: '21px' }} aria-hidden="true">{EMOJIS[c]}</span>
+                <span>{t(`crop_${c}` as any)}</span>
               </button>
             ))}
           </div>
         </div>
 
         <div style={{ marginBottom: '18px' }}>
-          <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: 'var(--text2)', marginBottom: '8px', letterSpacing: '0.8px' }}>ПЛОЩАДЬ (ГА)</label>
-          <input type="number" value={area} onChange={e => setArea(e.target.value)} placeholder="40" min="0.1" step="0.1"
-            style={{ width: '100%', padding: '12px 13px', background: 'var(--bg-input)', border: '1px solid var(--border2)', borderRadius: '9px', color: 'var(--text)', fontSize: '14px', fontFamily: 'JetBrains Mono, monospace', outline: 'none', transition: 'border-color 0.15s' }}
-            onFocus={e => e.target.style.borderColor = 'var(--accent)'} onBlur={e => e.target.style.borderColor = 'var(--border2)'} />
+          <label htmlFor="f-area" className="field-label">{t('areaLabel')}</label>
+          <input id="f-area" className="input mono" type="number" inputMode="decimal" value={area} onChange={e => setArea(e.target.value)} placeholder="40" min="0.1" step="0.1" />
         </div>
 
-        <div style={{ marginBottom: '24px' }}>
-          <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: 'var(--text2)', marginBottom: '8px', letterSpacing: '0.8px' }}>МЕСТОПОЛОЖЕНИЕ <span style={{ color: 'var(--text-dim)', fontWeight: 400 }}>(необязательно)</span></label>
-          <input value={loc} onChange={e => setLoc(e.target.value)} placeholder="Акмолинская обл."
-            style={{ width: '100%', padding: '12px 13px', background: 'var(--bg-input)', border: '1px solid var(--border2)', borderRadius: '9px', color: 'var(--text)', fontSize: '14px', fontFamily: 'inherit', outline: 'none', transition: 'border-color 0.15s' }}
-            onFocus={e => e.target.style.borderColor = 'var(--accent)'} onBlur={e => e.target.style.borderColor = 'var(--border2)'} />
+        <div style={{ marginBottom: '26px' }}>
+          <label htmlFor="f-loc" className="field-label">
+            {t('locLabel')} <span style={{ color: 'var(--gold)', fontWeight: 600, textTransform: 'none' }}>{t('locOptional')}</span>
+          </label>
+          <input id="f-loc" className="input" value={loc} onChange={e => setLoc(e.target.value)} placeholder={t('locPh')} />
         </div>
 
         <div style={{ display: 'flex', gap: '10px' }}>
-          <button onClick={onClose} style={{ flex: 1, padding: '13px', background: 'none', border: '1px solid var(--border2)', borderRadius: '10px', color: 'var(--text2)', cursor: 'pointer', fontFamily: 'inherit', fontSize: '14px', fontWeight: 700 }}>Отмена</button>
-          <button onClick={submit} disabled={loading} style={{ flex: 2, padding: '13px', background: loading ? 'var(--accent2)' : 'var(--accent)', border: 'none', borderRadius: '10px', color: '#030703', cursor: loading ? 'not-allowed' : 'pointer', fontFamily: 'inherit', fontSize: '14px', fontWeight: 800, opacity: loading ? 0.8 : 1 }}>
-            {loading ? 'Добавляем...' : '+ Добавить поле'}
+          <button onClick={onClose} className="btn btn-ghost" style={{ flex: 1 }}>{t('cancel')}</button>
+          <button onClick={submit} disabled={loading} className="btn btn-primary" style={{ flex: 2 }}>
+            {loading ? t('adding') : <><Icon name="plus" size={16} /> {t('addBtn')}</>}
           </button>
         </div>
       </div>

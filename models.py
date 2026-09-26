@@ -48,6 +48,7 @@ class AgentMessageRequest(BaseModel):
     field_id: str
     text: str
     channel: str          # 'voice' | 'text' | 'sms' | 'call'
+    lang: Optional[str] = "ru"   # 'ru' | 'kk' — язык ответа агента
 
 class AgentMessageResponse(BaseModel):
     answer: str

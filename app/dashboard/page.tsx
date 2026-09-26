@@ -3,9 +3,12 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getFields, getStats, Field, Stats, formatDate, getCropEmoji } from '@/lib/api'
 import AddFieldModal from '@/components/AddFieldModal'
+import Icon from '@/components/Icon'
+import { useLang, LangToggle } from '@/lib/i18n'
 
 export default function DashboardPage() {
   const router = useRouter()
+  const { lang, setLang, t } = useLang()
   const [name, setName] = useState('')
   const [fields, setFields] = useState<Field[]>([])
   const [stats, setStats] = useState<Stats | null>(null)
@@ -16,7 +19,7 @@ export default function DashboardPage() {
     const id = localStorage.getItem('farmer_id')
     const n = localStorage.getItem('farmer_name')
     if (!id) { router.push('/login'); return }
-    setName(n || 'Фермер')
+    setName(n || '')
     load(id)
   }, [router])
 
@@ -35,74 +38,100 @@ export default function DashboardPage() {
     if (id) load(id)
   }
 
+  const greeting = () => {
+    const h = new Date().getHours()
+    if (h < 6) return t('greetNight')
+    if (h < 12) return t('greetMorning')
+    if (h < 18) return t('greetDay')
+    return t('greetEvening')
+  }
+
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--bg)' }}>
-      <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 32px', borderBottom: '1px solid var(--border)', background: 'rgba(6,10,6,0.92)', backdropFilter: 'blur(16px)', position: 'sticky', top: 0, zIndex: 100 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <div style={{ width: '30px', height: '30px', borderRadius: '8px', background: 'var(--accent-dim)', border: '1px solid var(--border2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '15px' }}>🌾</div>
-          <span style={{ fontSize: '16px', fontWeight: 900, letterSpacing: '-0.3px' }}>AgriVoice</span>
+    <div style={{ minHeight: '100dvh', background: 'var(--bg)' }}>
+      <header className="navbar">
+        <div className="brand">
+          <span className="brand-mark"><Icon name="wheat" size={18} /></span>
+          <span className="brand-name">AgroVoice</span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-          <span style={{ fontSize: '14px', color: 'var(--text2)' }}>{name} 👋</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <LangToggle lang={lang} setLang={setLang} />
           <button onClick={() => { localStorage.clear(); router.push('/') }}
-            style={{ padding: '7px 14px', background: 'none', border: '1px solid var(--border2)', borderRadius: '8px', color: 'var(--text2)', cursor: 'pointer', fontFamily: 'inherit', fontSize: '13px', fontWeight: 600, transition: 'all 0.15s' }}
-            onMouseEnter={e => { e.currentTarget.style.borderColor = '#ef4444'; e.currentTarget.style.color = '#ef4444' }}
-            onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border2)'; e.currentTarget.style.color = 'var(--text2)' }}>
-            Выйти
+            className="btn btn-danger-ghost btn-sm" aria-label={t('logout')}>
+            <Icon name="logOut" size={15} /> {t('logout')}
           </button>
         </div>
       </header>
 
-      <main style={{ maxWidth: '1100px', margin: '0 auto', padding: '40px 24px' }}>
+      <main className="wrap" style={{ paddingTop: '40px', paddingBottom: '64px' }}>
+        {/* ПРИВЕТСТВИЕ */}
+        <div style={{ marginBottom: '32px', animation: 'fadeUp 0.4s ease both' }}>
+          <h1 className="display" style={{ fontSize: 'clamp(23px, 3vw, 31px)', marginBottom: '6px' }}>
+            {greeting()}{name ? `, ${name.split(' ')[0]}` : ''}
+          </h1>
+          <p style={{ color: 'var(--text2)', fontSize: '15.5px' }}>{t('dashSub')}</p>
+        </div>
+
         {/* СТАТИСТИКА */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: '14px', marginBottom: '40px' }}>
-          {[
-            { icon: '🌾', val: loading ? '—' : String(stats?.total_fields ?? 0), label: 'Полей', sub: 'активных' },
-            { icon: '💬', val: loading ? '—' : String(stats?.monthly_consultations ?? 0), label: 'Консультаций', sub: 'за этот месяц' },
-            { icon: '⏱', val: loading ? '—' : (stats?.last_activity ? formatDate(stats.last_activity) : '—'), label: 'Последний запрос', sub: '' },
-          ].map((s, i) => (
-            <div key={i} style={{ padding: '24px', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '14px', animation: `fadeUp 0.5s ${i * 0.08}s ease both` }}>
-              <div style={{ fontSize: '20px', marginBottom: '12px' }}>{s.icon}</div>
-              <div style={{ fontSize: '30px', fontWeight: 900, fontFamily: 'JetBrains Mono, monospace', color: 'var(--accent)', lineHeight: 1, marginBottom: '6px' }}>{s.val}</div>
-              <div style={{ fontSize: '13px', fontWeight: 700 }}>{s.label}</div>
-              {s.sub && <div style={{ fontSize: '11px', color: 'var(--text3)', marginTop: '2px' }}>{s.sub}</div>}
+        <div className="grid-stats" style={{ marginBottom: '44px' }}>
+          {([
+            ['layoutGrid', loading ? '—' : String(stats?.total_fields ?? 0), 'statFields', 'statFieldsSub'],
+            ['messageCircle', loading ? '—' : String(stats?.monthly_consultations ?? 0), 'statConsults', 'statConsultsSub'],
+            ['clock', loading ? '—' : (stats?.last_activity ? formatDate(stats.last_activity, lang) : '—'), 'statLast', null],
+          ] as const).map(([icon, val, label, sub], i) => (
+            <div key={i} className="card" style={{ padding: '24px', display: 'flex', gap: '18px', alignItems: 'center', animation: `fadeUp 0.5s ${i * 0.08}s ease both` }}>
+              <span className="icon-box" style={{ width: '48px', height: '48px' }}>
+                <Icon name={icon} size={21} />
+              </span>
+              <div>
+                <div className="mono" style={{ fontSize: '25px', fontWeight: 700, color: 'var(--accent)', lineHeight: 1.1 }}>{val}</div>
+                <div style={{ fontSize: '13.5px', fontWeight: 700, marginTop: '3px' }}>
+                  {t(label)}
+                  {sub && <span style={{ color: 'var(--text3)', fontWeight: 500 }}> · {t(sub)}</span>}
+                </div>
+              </div>
             </div>
           ))}
         </div>
 
-        {/* ЗАГОЛОВОК */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-          <h2 style={{ fontSize: '20px', fontWeight: 900, letterSpacing: '-0.3px' }}>
-            Мои поля
-            {!loading && fields.length > 0 && <span style={{ marginLeft: '8px', fontSize: '13px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text3)', fontWeight: 400 }}>{fields.length}</span>}
+        {/* ЗАГОЛОВОК СПИСКА */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', gap: '12px', flexWrap: 'wrap' }}>
+          <h2 className="display" style={{ fontSize: '21px' }}>
+            {t('myFields')}
+            {!loading && fields.length > 0 && (
+              <span className="mono" style={{ marginLeft: '10px', fontSize: '14px', color: 'var(--text3)', fontWeight: 400 }}>{fields.length}</span>
+            )}
           </h2>
-          <button onClick={() => setShowModal(true)} style={{ padding: '10px 20px', background: 'var(--accent)', border: 'none', borderRadius: '10px', color: '#030703', fontWeight: 800, fontSize: '14px', cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 0 24px rgba(74,222,128,0.2)', transition: 'all 0.15s' }}
-            onMouseEnter={e => e.currentTarget.style.background = '#86efac'}
-            onMouseLeave={e => e.currentTarget.style.background = 'var(--accent)'}>
-            + Добавить поле
+          <button onClick={() => setShowModal(true)} className="btn btn-primary btn-sm">
+            <Icon name="plus" size={15} /> {t('addField')}
           </button>
         </div>
 
         {loading && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(320px,1fr))', gap: '14px' }}>
-            {[1, 2].map(i => <div key={i} style={{ height: '180px', borderRadius: '16px' }} className="skeleton" />)}
+          <div className="grid-fields">
+            {[1, 2].map(i => <div key={i} style={{ height: '186px', borderRadius: '16px' }} className="skeleton" />)}
           </div>
         )}
 
         {!loading && fields.length === 0 && (
-          <div style={{ padding: '80px 24px', textAlign: 'center', border: '1px dashed var(--border2)', borderRadius: '20px' }}>
-            <div style={{ fontSize: '48px', marginBottom: '16px', animation: 'float 3s ease-in-out infinite' }}>🌱</div>
-            <h3 style={{ fontSize: '20px', fontWeight: 900, marginBottom: '8px' }}>Добавьте первое поле</h3>
-            <p style={{ color: 'var(--text2)', marginBottom: '28px' }}>Агент запомнит всю историю и будет давать точные советы</p>
-            <button onClick={() => setShowModal(true)} style={{ padding: '14px 28px', background: 'var(--accent)', border: 'none', borderRadius: '10px', color: '#030703', fontWeight: 800, fontSize: '15px', cursor: 'pointer', fontFamily: 'inherit' }}>
-              + Добавить поле
+          <div style={{ padding: '80px 24px', textAlign: 'center', border: '2px dashed #d8ceac', borderRadius: '22px', background: 'var(--bg-elev)' }}>
+            <span className="icon-box icon-box-gold" style={{ width: '68px', height: '68px', borderRadius: '20px', marginBottom: '20px', animation: 'float 3s ease-in-out infinite' }}>
+              <Icon name="sprout" size={32} />
+            </span>
+            <h3 className="display" style={{ fontSize: '21px', marginBottom: '10px' }}>{t('emptyTitle')}</h3>
+            <p style={{ color: 'var(--text2)', marginBottom: '28px', maxWidth: '380px', marginLeft: 'auto', marginRight: 'auto' }}>
+              {t('emptySub')}
+            </p>
+            <button onClick={() => setShowModal(true)} className="btn btn-primary">
+              <Icon name="plus" size={16} /> {t('addField')}
             </button>
           </div>
         )}
 
         {!loading && fields.length > 0 && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(320px,1fr))', gap: '14px' }}>
-            {fields.map((f, i) => <FieldCard key={f.id} field={f} index={i} onClick={() => router.push(`/field/${f.id}`)} />)}
+          <div className="grid-fields">
+            {fields.map((f, i) => (
+              <FieldCard key={f.id} field={f} index={i} lang={lang} t={t} onClick={() => router.push(`/field/${f.id}`)} />
+            ))}
           </div>
         )}
       </main>
@@ -112,27 +141,42 @@ export default function DashboardPage() {
   )
 }
 
-function FieldCard({ field, index, onClick }: { field: Field; index: number; onClick: () => void }) {
-  const [hovered, setHovered] = useState(false)
+function FieldCard({ field, index, lang, t, onClick }: {
+  field: Field; index: number; lang: 'ru' | 'kk'; t: (k: any) => string; onClick: () => void
+}) {
+  const cropLabel = t(`crop_${field.crop_type.toLowerCase()}` as any)
   return (
-    <div onClick={onClick} onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
-      style={{ padding: '24px', cursor: 'pointer', background: hovered ? 'var(--bg-card2)' : 'var(--bg-card)', border: `1px solid ${hovered ? 'var(--border2)' : 'var(--border)'}`, borderRadius: '16px', transition: 'all 0.2s', transform: hovered ? 'translateY(-3px)' : 'translateY(0)', boxShadow: hovered ? 'var(--shadow-green)' : 'none', animation: `fadeUp 0.5s ${index * 0.06}s ease both` }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <div style={{ width: '42px', height: '42px', borderRadius: '10px', background: 'var(--accent-dim)', border: '1px solid var(--border2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px' }}>{getCropEmoji(field.crop_type)}</div>
-          <div>
-            <div style={{ fontWeight: 800, fontSize: '16px', letterSpacing: '-0.2px' }}>{field.name}</div>
-            <div style={{ fontSize: '12px', color: 'var(--text3)', marginTop: '2px' }}>{field.crop_type}</div>
+    <div onClick={onClick} role="button" tabIndex={0}
+      onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && onClick()}
+      className="card card-hover"
+      style={{ padding: '24px', cursor: 'pointer', animation: `fadeUp 0.5s ${index * 0.06}s ease both` }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px', gap: '10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
+          <span className="icon-box" style={{ width: '46px', height: '46px', fontSize: '22px' }} aria-hidden="true">
+            {getCropEmoji(field.crop_type)}
+          </span>
+          <div style={{ minWidth: 0 }}>
+            <div className="display" style={{ fontWeight: 800, fontSize: '16.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{field.name}</div>
+            <div style={{ fontSize: '13px', color: 'var(--text3)', marginTop: '2px' }}>{cropLabel}</div>
           </div>
         </div>
-        <div style={{ padding: '4px 10px', background: 'var(--accent-dim)', border: '1px solid var(--border2)', borderRadius: '100px', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--accent)', fontWeight: 600 }}>{field.area_ha} га</div>
+        <span className="pill mono" style={{ flexShrink: 0 }}>{field.area_ha} {t('ha')}</span>
       </div>
-      <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: 1.5, marginBottom: '20px', minHeight: '40px', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-        {field.last_agent_message ? `🌾 ${field.last_agent_message}` : <span style={{ color: 'var(--text3)', fontStyle: 'italic' }}>Консультаций ещё не было</span>}
+
+      <div style={{ fontSize: '14px', color: 'var(--text2)', lineHeight: 1.55, marginBottom: '18px', minHeight: '43px', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+        {field.last_agent_message
+          ? field.last_agent_message
+          : <span style={{ color: 'var(--text-dim)', fontStyle: 'italic' }}>{t('noConsults')}</span>}
       </div>
+
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '16px', borderTop: '1px solid var(--border)' }}>
-        <span style={{ fontSize: '12px', color: 'var(--text3)', fontFamily: 'JetBrains Mono, monospace' }}>{formatDate(field.last_activity || field.created_at)}</span>
-        <span style={{ fontSize: '13px', fontWeight: 700, color: hovered ? 'var(--accent)' : 'var(--text2)', transition: 'color 0.15s' }}>Открыть →</span>
+        <span className="mono" style={{ fontSize: '12px', color: 'var(--text3)', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+          <Icon name="clock" size={12} />
+          {formatDate(field.last_activity || field.created_at, lang)}
+        </span>
+        <span style={{ fontSize: '13.5px', fontWeight: 800, color: 'var(--accent)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+          {t('open')} <Icon name="chevronRight" size={14} />
+        </span>
       </div>
     </div>
   )

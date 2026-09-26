@@ -3,17 +3,34 @@ AgriVoice — Supabase клиент и все запросы к БД
 """
 
 import os
-from supabase import create_client, Client
 from dotenv import load_dotenv
 from typing import Optional
 
 load_dotenv()
 
-# Инициализация Supabase клиента
 SUPABASE_URL: str = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY: str = os.environ.get("SUPABASE_KEY", "")
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# Ленивая инициализация: приложение стартует и без ключей,
+# а при первом запросе к БД даёт понятную ошибку (удобно при замене БД)
+_client = None
+
+
+class DatabaseNotConfigured(Exception):
+    """Отдельный класс, чтобы функции-«глотатели» ошибок его пропускали наверх"""
+
+
+def db():
+    global _client
+    if _client is None:
+        if not SUPABASE_URL or not SUPABASE_KEY:
+            raise DatabaseNotConfigured(
+                "База данных не настроена: заполните SUPABASE_URL и SUPABASE_KEY в .env "
+                "(см. .env.example и supabase_schema.sql)"
+            )
+        from supabase import create_client
+        _client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    return _client
 
 
 # ══════════════════════════════════════════════════════════════
@@ -23,8 +40,10 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 def get_farmer_by_phone(phone: str) -> Optional[dict]:
     """Найти фермера по номеру телефона"""
     try:
-        result = supabase.table("farmers").select("*").eq("phone", phone).single().execute()
+        result = db().table("farmers").select("*").eq("phone", phone).single().execute()
         return result.data
+    except DatabaseNotConfigured:
+        raise
     except Exception:
         return None
 
@@ -32,8 +51,10 @@ def get_farmer_by_phone(phone: str) -> Optional[dict]:
 def get_farmer_by_id(farmer_id: str) -> Optional[dict]:
     """Найти фермера по ID"""
     try:
-        result = supabase.table("farmers").select("*").eq("id", farmer_id).single().execute()
+        result = db().table("farmers").select("*").eq("id", farmer_id).single().execute()
         return result.data
+    except DatabaseNotConfigured:
+        raise
     except Exception:
         return None
 
@@ -41,7 +62,7 @@ def get_farmer_by_id(farmer_id: str) -> Optional[dict]:
 def create_farmer(name: str, phone: str) -> Optional[dict]:
     """Создать нового фермера"""
     try:
-        result = supabase.table("farmers").insert({
+        result = db().table("farmers").insert({
             "name": name,
             "phone": phone
         }).execute()
@@ -59,7 +80,7 @@ def create_session(farmer_id: str) -> Optional[dict]:
     import uuid
     try:
         token = str(uuid.uuid4())
-        result = supabase.table("sessions").insert({
+        result = db().table("sessions").insert({
             "farmer_id": farmer_id,
             "token": token
         }).execute()
@@ -71,8 +92,10 @@ def create_session(farmer_id: str) -> Optional[dict]:
 def get_session_by_token(token: str) -> Optional[dict]:
     """Найти сессию по токену"""
     try:
-        result = supabase.table("sessions").select("*").eq("token", token).single().execute()
+        result = db().table("sessions").select("*").eq("token", token).single().execute()
         return result.data
+    except DatabaseNotConfigured:
+        raise
     except Exception:
         return None
 
@@ -84,7 +107,7 @@ def get_session_by_token(token: str) -> Optional[dict]:
 def get_fields_by_farmer(farmer_id: str) -> list:
     """Получить все поля фермера"""
     try:
-        result = supabase.table("fields").select("*").eq("farmer_id", farmer_id).order("created_at", desc=False).execute()
+        result = db().table("fields").select("*").eq("farmer_id", farmer_id).order("created_at", desc=False).execute()
         return result.data or []
     except Exception as e:
         raise Exception(f"Ошибка получения полей: {str(e)}")
@@ -93,8 +116,10 @@ def get_fields_by_farmer(farmer_id: str) -> list:
 def get_field_by_id(field_id: str) -> Optional[dict]:
     """Получить данные одного поля"""
     try:
-        result = supabase.table("fields").select("*").eq("id", field_id).single().execute()
+        result = db().table("fields").select("*").eq("id", field_id).single().execute()
         return result.data
+    except DatabaseNotConfigured:
+        raise
     except Exception:
         return None
 
@@ -102,7 +127,7 @@ def get_field_by_id(field_id: str) -> Optional[dict]:
 def create_field(farmer_id: str, name: str, crop_type: str, area_ha: float, location: Optional[str] = None) -> Optional[dict]:
     """Добавить новое поле"""
     try:
-        result = supabase.table("fields").insert({
+        result = db().table("fields").insert({
             "farmer_id": farmer_id,
             "name": name,
             "crop_type": crop_type,
@@ -122,7 +147,7 @@ def get_field_history(field_id: str, limit: int = 20) -> list:
     """Получить последние N сообщений поля для контекста"""
     try:
         result = (
-            supabase.table("messages")
+            db().table("messages")
             .select("*")
             .eq("field_id", field_id)
             .order("created_at", desc=True)
@@ -138,9 +163,9 @@ def get_field_history(field_id: str, limit: int = 20) -> list:
 
 
 def save_message(farmer_id: str, field_id: str, role: str, content: str, channel: str) -> Optional[dict]:
-    """Сохранить сообщение в историю"""
+    """Сохранить одно сообщение в историю"""
     try:
-        result = supabase.table("messages").insert({
+        result = db().table("messages").insert({
             "farmer_id": farmer_id,
             "field_id": field_id,
             "role": role,
@@ -152,11 +177,22 @@ def save_message(farmer_id: str, field_id: str, role: str, content: str, channel
         raise Exception(f"Ошибка сохранения сообщения: {str(e)}")
 
 
+def save_message_pair(farmer_id: str, field_id: str, question: str, answer: str, channel: str) -> None:
+    """Сохранить вопрос и ответ одним запросом (вместо двух round-trip)"""
+    try:
+        db().table("messages").insert([
+            {"farmer_id": farmer_id, "field_id": field_id, "role": "user", "content": question, "channel": channel},
+            {"farmer_id": farmer_id, "field_id": field_id, "role": "assistant", "content": answer, "channel": channel},
+        ]).execute()
+    except Exception as e:
+        raise Exception(f"Ошибка сохранения сообщений: {str(e)}")
+
+
 def get_last_message_for_field(field_id: str) -> Optional[dict]:
-    """Получить последнее сообщение поля (для карточек в дашборде)"""
+    """Получить последнее сообщение поля (одиночный вариант)"""
     try:
         result = (
-            supabase.table("messages")
+            db().table("messages")
             .select("content, role, created_at")
             .eq("field_id", field_id)
             .eq("role", "assistant")
@@ -166,8 +202,37 @@ def get_last_message_for_field(field_id: str) -> Optional[dict]:
         )
         data = result.data
         return data[0] if data else None
+    except DatabaseNotConfigured:
+        raise
     except Exception:
         return None
+
+
+def get_last_messages_map(farmer_id: str, per_field_limit: int = 200) -> dict:
+    """
+    Последнее сообщение агента для КАЖДОГО поля фермера одним запросом.
+    Возвращает {field_id: {content, created_at}} — вместо N+1 запросов в дашборде.
+    """
+    try:
+        result = (
+            db().table("messages")
+            .select("field_id, content, created_at")
+            .eq("farmer_id", farmer_id)
+            .eq("role", "assistant")
+            .order("created_at", desc=True)
+            .limit(per_field_limit)
+            .execute()
+        )
+        latest: dict = {}
+        for msg in result.data or []:
+            # сообщения идут от новых к старым — первое встреченное и есть последнее
+            if msg["field_id"] not in latest:
+                latest[msg["field_id"]] = msg
+        return latest
+    except DatabaseNotConfigured:
+        raise
+    except Exception:
+        return {}
 
 
 def get_monthly_consultations(farmer_id: str) -> int:
@@ -179,7 +244,7 @@ def get_monthly_consultations(farmer_id: str) -> int:
         start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
 
         result = (
-            supabase.table("messages")
+            db().table("messages")
             .select("id", count="exact")
             .eq("farmer_id", farmer_id)
             .eq("role", "assistant")
@@ -187,5 +252,7 @@ def get_monthly_consultations(farmer_id: str) -> int:
             .execute()
         )
         return result.count or 0
+    except DatabaseNotConfigured:
+        raise
     except Exception:
         return 0

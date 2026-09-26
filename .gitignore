@@ -4,5 +4,9 @@ node_modules/
 __pycache__/
 *.pyc
 .env
+.env.local
 *.zip
 mnt/
+.DS_Store
+*.key
+vonage_private.key

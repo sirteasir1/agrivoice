@@ -16,10 +16,12 @@ from models import (
     MessageRecord,
 )
 from auth import register_farmer, login_farmer
+import asyncio
+
 from database import (
     get_fields_by_farmer, get_field_by_id, create_field,
-    get_field_history, save_message,
-    get_last_message_for_field, get_monthly_consultations,
+    get_field_history, save_message, save_message_pair,
+    get_last_messages_map, get_monthly_consultations,
     get_farmer_by_phone, get_farmer_by_id,
 )
 from gemini import ask_gemini, ask_gemini_simple
@@ -115,10 +117,11 @@ def get_fields(farmer_id: str):
     """
     try:
         fields = get_fields_by_farmer(farmer_id)
+        # Один батч-запрос вместо запроса на каждое поле (N+1)
+        last_map = get_last_messages_map(farmer_id)
         result = []
         for field in fields:
-            # Добавляем последнее сообщение агента для превью в карточке
-            last_msg = get_last_message_for_field(field["id"])
+            last_msg = last_map.get(field["id"])
             result.append({
                 **field,
                 "last_agent_message": last_msg["content"][:120] if last_msg else None,
@@ -159,6 +162,22 @@ def get_field(field_id: str):
     return field
 
 
+@app.get("/field/{field_id}/weather")
+def get_weather(field_id: str):
+    """Прогноз погоды на 5 дней по местоположению поля (Open-Meteo)."""
+    field = get_field_by_id(field_id)
+    if not field:
+        raise HTTPException(status_code=404, detail="Поле не найдено")
+    from weather import get_field_weather
+    weather = get_field_weather(field)
+    if not weather:
+        raise HTTPException(
+            status_code=404,
+            detail="Погода недоступна: не указано местоположение поля",
+        )
+    return weather
+
+
 @app.get("/field/{field_id}/history")
 def get_history(field_id: str, limit: int = 50):
     """История сообщений поля"""
@@ -182,13 +201,11 @@ def get_stats(farmer_id: str):
         fields = get_fields_by_farmer(farmer_id)
         monthly = get_monthly_consultations(farmer_id)
 
-        # Последняя активность — ищем самое свежее сообщение
-        last_activity = None
-        for field in fields:
-            last_msg = get_last_message_for_field(field["id"])
-            if last_msg:
-                if not last_activity or last_msg["created_at"] > last_activity:
-                    last_activity = last_msg["created_at"]
+        # Последняя активность — из одного батч-запроса, без перебора полей
+        last_map = get_last_messages_map(farmer_id)
+        last_activity = max(
+            (m["created_at"] for m in last_map.values()), default=None
+        )
 
         return {
             "total_fields": len(fields),
@@ -216,15 +233,30 @@ async def agent_message(data: AgentMessageRequest):
     5. Вернуть ответ
     """
     # Проверяем что поле существует
-    field = get_field_by_id(data.field_id)
+    field = await asyncio.to_thread(get_field_by_id, data.field_id)
     if not field:
         raise HTTPException(status_code=404, detail="Поле не найдено")
 
-    # Получаем историю поля для контекста
-    try:
-        history = get_field_history(data.field_id, limit=20)
-    except Exception:
-        history = []  # Если история недоступна — продолжаем без неё
+    def _load_history():
+        try:
+            return get_field_history(data.field_id, limit=20)
+        except Exception:
+            return []  # Если история недоступна — продолжаем без неё
+
+    def _load_weather():
+        # Погода по полю — best-effort, агент учитывает её в советах
+        try:
+            from weather import get_field_weather, weather_for_prompt
+            return weather_for_prompt(get_field_weather(field))
+        except Exception as e:
+            print(f"[Warning] Погода недоступна: {e}")
+            return ""
+
+    # История и погода грузятся параллельно, не блокируя event loop
+    history, weather_text = await asyncio.gather(
+        asyncio.to_thread(_load_history),
+        asyncio.to_thread(_load_weather),
+    )
 
     # Запрашиваем ответ у Gemini
     try:
@@ -232,33 +264,19 @@ async def agent_message(data: AgentMessageRequest):
             field=field,
             history=history,
             user_text=data.text,
+            weather_text=weather_text,
+            lang=data.lang or "ru",
         )
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"AI временно недоступен: {str(e)}")
 
-    # Сохраняем сообщение фермера в историю
+    # Сохраняем вопрос и ответ одним запросом
     try:
-        save_message(
-            farmer_id=data.farmer_id,
-            field_id=data.field_id,
-            role="user",
-            content=data.text,
-            channel=data.channel,
+        await asyncio.to_thread(
+            save_message_pair, data.farmer_id, data.field_id, data.text, answer, data.channel,
         )
     except Exception as e:
-        print(f"[Warning] Не удалось сохранить сообщение пользователя: {e}")
-
-    # Сохраняем ответ агента в историю
-    try:
-        save_message(
-            farmer_id=data.farmer_id,
-            field_id=data.field_id,
-            role="assistant",
-            content=answer,
-            channel=data.channel,
-        )
-    except Exception as e:
-        print(f"[Warning] Не удалось сохранить ответ агента: {e}")
+        print(f"[Warning] Не удалось сохранить историю: {e}")
 
     return AgentMessageResponse(
         answer=answer,
@@ -312,8 +330,9 @@ async def twilio_sms_webhook(request: Request):
     farmer_name = farmer["name"]
     body_lower = body.lower()
 
-    # Команда "мои поля" — отправляем список
-    if any(cmd in body_lower for cmd in ["мои поля", "список полей", "поля"]):
+    # Команда "мои поля" — только точное совпадение,
+    # иначе вопрос вида "поля желтеют" ошибочно вернёт список
+    if body_lower in ("мои поля", "список полей", "поля", "менің егістіктерім"):
         fields = get_fields_by_farmer(farmer_id)
         if not fields:
             xml_response = build_sms_error_response(SMS_NO_FIELDS)
@@ -377,10 +396,9 @@ async def twilio_sms_webhook(request: Request):
         )
         return Response(content=xml_response, media_type="application/xml")
 
-    # Сохраняем в историю
+    # Сохраняем в историю одним запросом
     try:
-        save_message(farmer_id, target_field["id"], "user", question_text, "sms")
-        save_message(farmer_id, target_field["id"], "assistant", answer, "sms")
+        save_message_pair(farmer_id, target_field["id"], question_text, answer, "sms")
     except Exception as e:
         print(f"[Warning] Не удалось сохранить SMS историю: {e}")
 
@@ -478,12 +496,21 @@ async def twilio_voice_process(request: Request, field_id: str, farmer_id: str):
     except Exception:
         history = []
 
+    # Погода по полю — чтобы совет по телефону тоже учитывал прогноз
+    weather_text = ""
+    try:
+        from weather import get_field_weather, weather_for_prompt
+        weather_text = weather_for_prompt(get_field_weather(field))
+    except Exception:
+        pass
+
     # Запрашиваем Gemini
     try:
         answer = await ask_gemini(
             field=field,
             history=history,
             user_text=speech_result,
+            weather_text=weather_text,
         )
     except Exception as e:
         xml_response = build_voice_error(
@@ -491,10 +518,9 @@ async def twilio_voice_process(request: Request, field_id: str, farmer_id: str):
         )
         return Response(content=xml_response, media_type="application/xml")
 
-    # Сохраняем в историю
+    # Сохраняем в историю одним запросом
     try:
-        save_message(farmer_id, field_id, "user", speech_result, "call")
-        save_message(farmer_id, field_id, "assistant", answer, "call")
+        save_message_pair(farmer_id, field_id, speech_result, answer, "call")
     except Exception as e:
         print(f"[Warning] Не удалось сохранить историю звонка: {e}")
 
@@ -566,15 +592,14 @@ async def send_manual_sms(farmer_id: str, data: AgentMessageRequest):
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e))
 
-    # Сохраняем в историю
+    # Сохраняем в историю одним запросом
     try:
-        save_message(farmer_id, data.field_id, "user", data.text, "sms")
-        save_message(farmer_id, data.field_id, "assistant", answer, "sms")
+        save_message_pair(farmer_id, data.field_id, data.text, answer, "sms")
     except Exception:
         pass
 
-    # Отправляем SMS
-    from twilio_service import send_agent_answer_sms
+    # Отправляем SMS через Vonage (Twilio не используется)
+    from vonage_service import send_agent_answer_sms
     success = send_agent_answer_sms(
         to_phone=farmer["phone"],
         answer=answer,
@@ -582,6 +607,172 @@ async def send_manual_sms(farmer_id: str, data: AgentMessageRequest):
     )
 
     return {"answer": answer, "sms_sent": success}
+
+
+# ══════════════════════════════════════════════════════════════
+# VONAGE — звонки (NCCO) и SMS (замена Twilio)
+# ══════════════════════════════════════════════════════════════
+#
+# Настройка в Vonage: приложение AgriVoice с вебхуками на этот бэкенд.
+# Voice answer_url  (GET):  /vonage/voice/answer
+# Voice event_url   (POST): /vonage/voice/event
+# Messages inbound  (POST): /vonage/sms/inbound
+#
+
+async def _agent_for_channel(field: dict, farmer_id: str, text: str, channel: str) -> str:
+    """Общая логика: история + погода параллельно, ответ Gemini, сохранение."""
+    def _hist():
+        try:
+            return get_field_history(field["id"], limit=10)
+        except Exception:
+            return []
+    def _weather():
+        try:
+            from weather import get_field_weather, weather_for_prompt
+            return weather_for_prompt(get_field_weather(field))
+        except Exception:
+            return ""
+    history, weather_text = await asyncio.gather(
+        asyncio.to_thread(_hist), asyncio.to_thread(_weather),
+    )
+    answer = await ask_gemini(field=field, history=history, user_text=text, weather_text=weather_text)
+    try:
+        await asyncio.to_thread(save_message_pair, farmer_id, field["id"], text, answer, channel)
+    except Exception as e:
+        print(f"[Warning] Vonage: не сохранил историю: {e}")
+    return answer
+
+
+@app.get("/vonage/voice/answer")
+async def vonage_voice_answer(request: Request):
+    """Входящий звонок: приветствие + запрос речи (NCCO)."""
+    from vonage_service import ncco_welcome, ncco_error, normalize_phone
+    from_phone = normalize_phone(request.query_params.get("from", ""))
+    print(f"[Vonage Voice] входящий от {from_phone}")
+
+    farmer = await asyncio.to_thread(get_farmer_by_phone, from_phone)
+    if not farmer:
+        return JSONResponse(ncco_error(
+            "Ваш номер не зарегистрирован в АгриВойс. Пожалуйста, зайдите на сайт для регистрации."
+        ))
+    fields = await asyncio.to_thread(get_fields_by_farmer, farmer["id"])
+    if not fields:
+        return JSONResponse(ncco_error(
+            "У вас нет добавленных полей. Пожалуйста, добавьте поле на сайте АгриВойс."
+        ))
+    field = fields[0]
+    return JSONResponse(ncco_welcome(field["name"], field["id"], farmer["id"]))
+
+
+@app.post("/vonage/voice/asr")
+async def vonage_voice_asr(request: Request, field_id: str, farmer_id: str):
+    """Vonage прислал распознанную речь фермера."""
+    from vonage_service import ncco_answer, ncco_error, ncco_goodbye
+    body = await request.json()
+    speech = ""
+    try:
+        results = body.get("speech", {}).get("results", [])
+        if results:
+            speech = results[0].get("text", "")
+    except Exception:
+        speech = ""
+
+    print(f"[Vonage ASR] поле={field_id}: '{speech}'")
+    if not speech:
+        return JSONResponse(ncco_error("Извините, я не расслышал. Пожалуйста, перезвоните."))
+
+    field = await asyncio.to_thread(get_field_by_id, field_id)
+    if not field:
+        return JSONResponse(ncco_error("Поле не найдено. Проверьте настройки на сайте."))
+
+    try:
+        answer = await _agent_for_channel(field, farmer_id, speech, "call")
+    except Exception as e:
+        print(f"[Vonage ASR] ошибка агента: {e}")
+        return JSONResponse(ncco_error("Произошла ошибка. Пожалуйста, попробуйте позже."))
+
+    return JSONResponse(ncco_answer(answer, field_id, farmer_id))
+
+
+@app.post("/vonage/voice/event")
+async def vonage_voice_event(request: Request):
+    """Служебные события звонка — логируем статус для диагностики."""
+    try:
+        body = await request.json()
+        print(f"[Vonage Event] status={body.get('status')} reason={body.get('reason','')} "
+              f"detail={body.get('detail','')} dur={body.get('duration','')}")
+    except Exception:
+        pass
+    return Response(status_code=204)
+
+
+@app.post("/vonage/sms/status")
+async def vonage_sms_status(request: Request):
+    return Response(status_code=204)
+
+
+@app.post("/vonage/sms/inbound")
+async def vonage_sms_inbound(request: Request):
+    """Входящий SMS. Формат: 'мои поля' | 'поле N: вопрос' | любой текст."""
+    from vonage_service import send_sms, normalize_phone
+    # Vonage шлёт JSON (Messages API) или form (старый SMS API) — поддержим оба
+    try:
+        body = await request.json()
+    except Exception:
+        form = await request.form()
+        body = dict(form)
+
+    from_phone = normalize_phone(str(body.get("from") or body.get("msisdn") or ""))
+    if isinstance(body.get("text"), dict):
+        text = ""
+    else:
+        text = str(body.get("text") or "").strip()
+    print(f"[Vonage SMS] от {from_phone}: {text}")
+
+    farmer = await asyncio.to_thread(get_farmer_by_phone, from_phone)
+    if not farmer:
+        send_sms(from_phone, SMS_NOT_REGISTERED)
+        return Response(status_code=204)
+
+    farmer_id = farmer["id"]
+    fields = await asyncio.to_thread(get_fields_by_farmer, farmer_id)
+    if not fields:
+        send_sms(from_phone, SMS_NO_FIELDS)
+        return Response(status_code=204)
+
+    low = text.lower()
+    if low in ("мои поля", "список полей", "поля", "менің егістіктерім"):
+        msg = SMS_FIELDS_LIST_HEADER
+        for i, f in enumerate(fields, 1):
+            msg += f"{i}. {f['name']} — {f['crop_type']}, {f['area_ha']} га\n"
+        msg += "\nОтправьте: 'поле 1: ваш вопрос'"
+        send_sms(from_phone, msg)
+        return Response(status_code=204)
+
+    # разбор "поле N: вопрос"
+    target, question = fields[0], text
+    if low.startswith("поле "):
+        parts = text.split(":", 1)
+        if len(parts) == 2:
+            ref = parts[0].replace("поле", "").replace("Поле", "").strip()
+            question = parts[1].strip()
+            if ref.isdigit() and 0 <= int(ref) - 1 < len(fields):
+                target = fields[int(ref) - 1]
+            else:
+                for f in fields:
+                    if ref.lower() in f["name"].lower():
+                        target = f
+                        break
+
+    try:
+        answer = await _agent_for_channel(target, farmer_id, question, "sms")
+    except Exception as e:
+        print(f"[Vonage SMS] ошибка агента: {e}")
+        send_sms(from_phone, "АгриВойс: ошибка обработки запроса. Попробуйте позже.")
+        return Response(status_code=204)
+
+    send_sms(from_phone, f"Поле «{target['name']}»:\n{answer}")
+    return Response(status_code=204)
 
 
 # ══════════════════════════════════════════════════════════════

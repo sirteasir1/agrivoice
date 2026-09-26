@@ -27,9 +27,16 @@ export const createField = (farmer_id: string, body: { name: string; crop_type: 
 export interface Stats { total_fields: number; monthly_consultations: number; last_activity: string | null }
 export const getStats = (id: string) => req<Stats>(`/farmer/${id}/stats`)
 
+export interface WeatherDay {
+  date: string; code: number; desc_ru: string; desc_kk: string
+  t_max: number; t_min: number; precip_mm: number; precip_prob: number; wind_max: number
+}
+export interface Weather { location: string; lat: number; lon: number; days: WeatherDay[] }
+export const getFieldWeather = (field_id: string) => req<Weather>(`/field/${field_id}/weather`)
+
 export interface Message { id?: string; role: 'user' | 'assistant'; content: string; channel: string; created_at?: string }
-export const sendMessage = (farmer_id: string, field_id: string, text: string, channel: 'text' | 'voice') =>
-  req<{ answer: string }>('/agent/message', { method: 'POST', body: JSON.stringify({ farmer_id, field_id, text, channel }) })
+export const sendMessage = (farmer_id: string, field_id: string, text: string, channel: 'text' | 'voice', lang: string = 'ru') =>
+  req<{ answer: string }>('/agent/message', { method: 'POST', body: JSON.stringify({ farmer_id, field_id, text, channel, lang }) })
 export const getFieldHistory = (field_id: string) =>
   req<{ messages: Message[] }>(`/field/${field_id}/history?limit=100`).then(d => d.messages)
 
@@ -38,13 +45,13 @@ export const getFarmerId = () => typeof window !== 'undefined' ? localStorage.ge
 export const formatTime = (d: string) =>
   new Date(d).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
 
-export const formatDate = (d: string) => {
+export const formatDate = (d: string, lang: 'ru' | 'kk' = 'ru') => {
   const date = new Date(d), now = new Date()
   const days = Math.floor((now.getTime() - date.getTime()) / 86400000)
-  if (days === 0) return 'Сегодня'
-  if (days === 1) return 'Вчера'
-  if (days < 7) return `${days}д назад`
-  return date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })
+  if (days === 0) return lang === 'kk' ? 'Бүгін' : 'Сегодня'
+  if (days === 1) return lang === 'kk' ? 'Кеше' : 'Вчера'
+  if (days < 7) return lang === 'kk' ? `${days} күн бұрын` : `${days}д назад`
+  return date.toLocaleDateString(lang === 'kk' ? 'kk-KZ' : 'ru-RU', { day: 'numeric', month: 'short' })
 }
 
 export const CROP_EMOJI: Record<string, string> = { пшеница: '🌾', кукуруза: '🌽', подсолнух: '🌻', хлопок: '🌿', ячмень: '🌱' }
